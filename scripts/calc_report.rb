@@ -64,12 +64,13 @@ class LogLineProcessor
 
     campaign_by_id = {}
 
-     # 現在の秒.00より小さいレコードに限定
-     crit = self.criteria(last_record)
+    # 現在の秒.00より小さいレコードに限定
+    crit = self.criteria(last_record)
 
-     last_one = crit.last
-     p last_one
-     sup = Time.at(last_one.time.to_i) # :00
+    last_one = crit.last
+    return buf if last_one.nil?
+    p last_one
+    sup = Time.at(last_one.time.to_i) # :00
 
     cnt = 0
     crit.lt(:time => sup).each { |r|
@@ -209,7 +210,7 @@ end
 
 count_buffer = CountBuffer.new
 DeliverLogLineProcessor.new.process(count_buffer)
-#ClickLogLineProcessor.new.process(count_buffer)
+ClickLogLineProcessor.new.process(count_buffer)
 
 count_buffer.each do |c|
   # spendを計算する
