@@ -60,17 +60,24 @@ class LogLineProcessor
     # 最後に記録された時刻を取得
 #    last_record = RecordLog.where(symbol: sym).order_by(:recorded_at.desc).first.recorded_at
     last_record = Time.parse('2015-03-12T00:00:00')
+    p last_record
 
     campaign_by_id = {}
 
+     # 現在の秒.00より小さいレコードに限定
+     crit = self.criteria(last_record)
+
+     last_one = crit.last
+     p last_one
+     sup = Time.at(last_one.time.to_i) # :00
+
     cnt = 0
-    self.criteria(last_record).each { |r|
+    crit.lt(:time => sup).each { |r|
       # ここでデータ作る
       printf("[%d]: %p\n", cnt, r)
-    
+
       if campaign_by_id.key?(r.CampaignID) then
         ca = campaign_by_id[r.CampaignID]
-    #    p '# cache hit'
       else
         ca = Campaign.find_by_id(r.CampaignID)
         campaign_by_id[r.CampaignID] = ca
@@ -78,7 +85,6 @@ class LogLineProcessor
       next if ca.nil?
       printf("campaign_id: %d => adv_id: %d\n", ca.id, ca.advertiser_id)
       cnt = cnt + 1
-    
       counter_args = {
         :date => r.time,
         :advertiser_id => ca.advertiser_id,
@@ -86,7 +92,7 @@ class LogLineProcessor
         :publisher_id => r.PublisherID,
         :unit_id => r.UnitID
       }
-    
+
       if /BannerAd/ =~ r.AdType then
         counter_args[:ad_id] = r.AdData["ID"]
         counter_args[:creative_id] = r.AdData["CreativeID"]
@@ -94,7 +100,7 @@ class LogLineProcessor
         counter_args[:ad_id] = r.AdData["ID"]
         counter_args[:creative_id] = r.AdData["CreativeID"]
       end
-    
+
       buf.accumulate(sym, counter_args)
     }
 
@@ -114,11 +120,12 @@ class DeliverLogLineProcessor < LogLineProcessor
   end
 
   def criteria(last_time)
+    p 'deliver criteria(last_time=' + last_time.to_s + ')'
     return DeliverLogLine.gte(:time => last_time).order_by(:time.asc)
   end
 end
 
-class DeliverLogLineProcessor < LogLineProcessor
+class ClickLogLineProcessor < LogLineProcessor
   def symbol
     return "click"
   end
@@ -202,7 +209,7 @@ end
 
 count_buffer = CountBuffer.new
 DeliverLogLineProcessor.new.process(count_buffer)
-ClickLogLineProcessor.new.process(count_buffer)
+#ClickLogLineProcessor.new.process(count_buffer)
 
 count_buffer.each do |c|
   # spendを計算する
@@ -221,7 +228,7 @@ count_buffer.each do |c|
   # ここでMySQLに加算
   Report.create!(
     date: c[:date],
-    advertier_id: c[:advertiser_id],
+    advertiser_id: c[:advertiser_id],
     campaign_id: c[:campaign_id],
     creative_id: c[:creative_id],
     ad_id: c[:ad_id],
