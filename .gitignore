@@ -21,3 +21,6 @@
 
 # Ignore MaxOSX metadata file
 .DS_Store
+
+# Temporary module files
+/vendor

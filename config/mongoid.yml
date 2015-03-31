@@ -1,0 +1,13 @@
+# http://mongoid.org/en/mongoid/docs/installation.html#configuration
+development:
+    sessions:
+        default:
+            database: fluentd
+            hosts:
+                - localhost:27017
+production:
+    sessions:
+        default:
+            database: fluentd
+            hosts:
+                - localhost:27017
