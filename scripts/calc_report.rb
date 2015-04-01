@@ -4,6 +4,7 @@ require 'active_record'
 require 'mysql2'
 require 'yaml'
 require 'switch_point'
+require 'logger'
 
 # Type
 
@@ -12,27 +13,44 @@ module BidChargeType
   CPM = 2
 end
 
+class Log
+  @@logger = nil
+#  attr_reader :logger
+  def self.logger
+    if @@logger.nil? then
+      @@logger = Logger.new(File.join(ENV["MERYAD_BATCH_PATH"], 'log/calc_report.log'))
+      if ( ENV["MERYAD_EXEC_ENV"] == "production" ) then
+        @@logger.level = Logger::INFO
+        @@logger.progname = 'calc_report.rb'
+      end
+    end
+    return @@logger
+  end
+end
+
 # Environments
 
-is_production = ( ENV["MERYAD_EXEC_ENV"] == "production" )
-
-meryad_batch_path = File.join(ENV["HOME"], 'mery_ad_batch')
-if ENV.key?("MERYAD_BATCH_PATH") then
-    meryad_batch_path = ENV["MERYAD_BATCH_PATH"]
+if ( ENV["MERYAD_EXEC_ENV"] == "production" ) then
+  is_production = true
+else
+  ENV["MERYAD_EXEC_ENV"] = "development"
 end
+
+ENV["MERYAD_BATCH_PATH"] ||= File.join(ENV["HOME"], 'mery_ad_batch')
 
 # ActiveRecord
 
-exec_env = is_production ? "production" : "development"
+ActiveRecord::Base.configurations = YAML.load_file(File.join(ENV["MERYAD_BATCH_PATH"], 'config/database.yml'))
+ActiveRecord::Base.establish_connection(:"#{ENV["MERYAD_EXEC_ENV"]}_ad_master")
+ActiveRecord::Base.establish_connection(:"#{ENV["MERYAD_EXEC_ENV"]}_ad_slave")
 
-ActiveRecord::Base.configurations = YAML.load_file(File.join(meryad_batch_path, 'config/database.yml'))
-ActiveRecord::Base.establish_connection(:"#{exec_env}_ad_master")
-ActiveRecord::Base.establish_connection(:"#{exec_env}_ad_slave")
+logger = Log::logger
+logger.info 'info level log..'
 
 SwitchPoint.configure do |config|
   config.define_switch_point :ad,
-    readonly: :"#{exec_env}_ad_master",
-    writable: :"#{exec_env}_ad_slave"
+    readonly: :"#{ENV["MERYAD_EXEC_ENV"]}_ad_master",
+    writable: :"#{ENV["MERYAD_EXEC_ENV"]}_ad_slave"
 end
 
 class Campaign < ActiveRecord::Base
@@ -45,7 +63,7 @@ end
 
 # Mongoid
 
-mongoid_yml = File.join(meryad_batch_path, 'config/mongoid.yml')
+mongoid_yml = File.join(ENV["MERYAD_BATCH_PATH"], 'config/mongoid.yml')
 if is_production then
   Mongoid.load!(mongoid_yml, :production)
 else
