@@ -15,7 +15,6 @@ end
 
 class Log
   @@logger = nil
-#  attr_reader :logger
   def self.logger
     if @@logger.nil? then
       @@logger = Logger.new(File.join(ENV["MERYAD_BATCH_PATH"], 'log/calc_report.log'))
@@ -129,9 +128,13 @@ class LogLineProcessor
     start_at = DateTime.now
 
     # 最後に記録された時刻を取得
-#    last_record = RecordLog.where(symbol: sym).order_by(:recorded_at.desc).first.recorded_at
-    last_record = Time.parse('2015-03-12T00:00:00')
-    p last_record
+    if ENV["MERYAD_LAST_RECORDED_AT"] then
+#      last_record = Time.parse('2015-03-12T00:00:00')
+      last_record = Time.parse(ENV["MERYAD_LAST_RECORDED_AT"])
+    else
+      last_record = RecordLog.where(symbol: sym).order_by(:recorded_at.desc).first.recorded_at
+    end
+#    p last_record
 
     campaign_by_id = {}
 
@@ -140,13 +143,12 @@ class LogLineProcessor
 
     last_one = crit.last
     return buf if last_one.nil?
-    p last_one
     sup = Time.at(last_one.time.to_i) # :00
 
     cnt = 0
     crit.lt(:time => sup).each { |r|
       # ここでデータ作る
-      printf("[%d]: %p\n", cnt, r)
+#      printf("[%d]: %p\n", cnt, r)
 
       ca = nil
       if campaign_by_id.key?(r.CampaignID) then
@@ -158,7 +160,7 @@ class LogLineProcessor
         campaign_by_id[r.CampaignID] = ca
       end
       next if ca.nil?
-      printf("campaign_id: %d => adv_id: %d\n", ca.id, ca.advertiser_id)
+#      printf("campaign_id: %d => adv_id: %d\n", ca.id, ca.advertiser_id)
       cnt = cnt + 1
       counter_args = {
         :date => r.time,
@@ -195,7 +197,6 @@ class DeliverLogLineProcessor < LogLineProcessor
   end
 
   def criteria(last_time)
-    p 'deliver criteria(last_time=' + last_time.to_s + ')'
     return DeliverLogLine.gte(:time => last_time).order_by(:time.asc)
   end
 end
@@ -216,7 +217,6 @@ class CountBuffer
   end
 
   def accumulate(sym, args)
-    p sym
     date = args[:date].to_date
     @counter[date] ||= {}
     @counter[date][args[:advertiser_id]] ||= {}
