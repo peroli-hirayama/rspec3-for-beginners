@@ -2,12 +2,54 @@ require 'mongoid'
 require 'time'
 require 'active_record'
 require 'mysql2'
+require 'yaml'
+require 'switch_point'
 
-Mongoid.load!('config/mongoid.yml', :development)
+# Type
 
 module BidChargeType
   CPC = 1
   CPM = 2
+end
+
+# Environments
+
+is_production = ( ENV["MERYAD_EXEC_ENV"] == "production" )
+
+meryad_batch_path = File.join(ENV["HOME"], 'mery_ad_batch')
+if ENV.key?("MERYAD_BATCH_PATH") then
+    meryad_batch_path = ENV["MERYAD_BATCH_PATH"]
+end
+
+# ActiveRecord
+
+exec_env = is_production ? "production" : "development"
+
+ActiveRecord::Base.configurations = YAML.load_file(File.join(meryad_batch_path, 'config/database.yml'))
+ActiveRecord::Base.establish_connection(:"#{exec_env}_ad_master")
+ActiveRecord::Base.establish_connection(:"#{exec_env}_ad_slave")
+
+SwitchPoint.configure do |config|
+  config.define_switch_point :ad,
+    readonly: :"#{exec_env}_ad_master",
+    writable: :"#{exec_env}_ad_slave"
+end
+
+class Campaign < ActiveRecord::Base
+  use_switch_point :ad
+end
+
+class Report < ActiveRecord::Base
+  use_switch_point :ad
+end
+
+# Mongoid
+
+mongoid_yml = File.join(meryad_batch_path, 'config/mongoid.yml')
+if is_production then
+  Mongoid.load!(mongoid_yml, :production)
+else
+  Mongoid.load!(mongoid_yml, :development)
 end
 
 class DeliverLogLine
@@ -50,6 +92,17 @@ class ClickLogLine
     store_in collection: "click_logs"
 end
 
+class RecordLog
+    include Mongoid::Document
+    field :started_at, :type => DateTime
+    field :written_data, :type => Hash
+    field :symbol, :type => String
+    field :recorded_at, :type => DateTime
+#    store_in collection: "record_log"
+end
+
+# Other classes
+
 class LogLineProcessor
   def process(buf)
     sym = self.symbol
@@ -77,10 +130,13 @@ class LogLineProcessor
       # ここでデータ作る
       printf("[%d]: %p\n", cnt, r)
 
+      ca = nil
       if campaign_by_id.key?(r.CampaignID) then
         ca = campaign_by_id[r.CampaignID]
       else
-        ca = Campaign.find_by_id(r.CampaignID)
+        Campaign.with_readonly do
+          ca = Campaign.find_by_id(r.CampaignID)
+        end
         campaign_by_id[r.CampaignID] = ca
       end
       next if ca.nil?
@@ -136,29 +192,6 @@ class ClickLogLineProcessor < LogLineProcessor
   end
 end
 
-class RecordLog
-    include Mongoid::Document
-    field :started_at, :type => DateTime
-    field :written_data, :type => Hash
-    field :symbol, :type => String
-    field :recorded_at, :type => DateTime
-#    store_in collection: "record_log"
-end
-
-ActiveRecord::Base.establish_connection(
-  :adapter => 'mysql2',
-  :host => 'localhost',
-  :username => 'adpf_user',
-  :password => 'sd98udha73a2vm',
-  :database => 'mery_adpf',
-)
-
-class Campaign < ActiveRecord::Base
-end
-
-class Report < ActiveRecord::Base
-end
-
 class CountBuffer
   def initialize
     @counter = {}
@@ -208,15 +241,20 @@ class CountBuffer
   end
 end
 
+# Main processes
+
 count_buffer = CountBuffer.new
 DeliverLogLineProcessor.new.process(count_buffer)
 ClickLogLineProcessor.new.process(count_buffer)
 
 count_buffer.each do |c|
-  # spendを計算する
+  # calc spend
   spend = 0
-  ca = Campaign.find_by_id(c[:campaign_id])
-  next if ca.nil? 
+  ca = nil
+  Campaign.with_readonly do
+    ca = Campaign.find_by_id(c[:campaign_id])
+  end
+  next if ca.nil?
 
   case ca.bid_charge_type
   when BidChargeType::CPC
@@ -226,17 +264,19 @@ count_buffer.each do |c|
   else
   end
 
-  # ここでMySQLに加算
-  Report.create!(
-    date: c[:date],
-    advertiser_id: c[:advertiser_id],
-    campaign_id: c[:campaign_id],
-    creative_id: c[:creative_id],
-    ad_id: c[:ad_id],
-    publisher_id: c[:publisher_id],
-    unit_id: c[:unit_id],
-    impression_count: c[:impression_count],
-    click_count: c[:click_count],
-    spend: spend,
-  )
+  # insert as mysql records
+  Report.with_writable do
+    Report.create!(
+      date: c[:date],
+      advertiser_id: c[:advertiser_id],
+      campaign_id: c[:campaign_id],
+      creative_id: c[:creative_id],
+      ad_id: c[:ad_id],
+      publisher_id: c[:publisher_id],
+      unit_id: c[:unit_id],
+      impression_count: c[:impression_count],
+      click_count: c[:click_count],
+      spend: spend,
+    )
+  end
 end

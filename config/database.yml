@@ -1,0 +1,24 @@
+development_ad_master:
+    adapter: mysql2
+    host: localhost
+    username: root
+    password:
+    database: mery_ad
+development_ad_slave:
+    adapter: mysql2
+    host: localhost
+    username: root
+    password:
+    database: mery_ad
+production_ad_master:
+    adapter: mysql2
+    host: master-db.adpf.mery.local
+    username: adpf_user
+    password: sd98udha73a2vm
+    database: mery_adpf
+production_ad_slave:
+    adapter: mysql2
+    host: slave-db01.adpf.mery.local
+    username: adpf_user
+    password: sd98udha73a2vm
+    database: mery_adpf
