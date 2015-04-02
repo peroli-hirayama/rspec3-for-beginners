@@ -20,8 +20,8 @@ class Log
       @@logger = Logger.new(File.join(ENV["MERYAD_BATCH_PATH"], 'log/calc_report.log'))
       if ( ENV["MERYAD_EXEC_ENV"] == "production" ) then
         @@logger.level = Logger::INFO
-        @@logger.progname = 'calc_report.rb'
       end
+      @@logger.progname = 'calc_report.rb'
     end
     return @@logger
   end
@@ -37,14 +37,20 @@ end
 
 ENV["MERYAD_BATCH_PATH"] ||= File.join(ENV["HOME"], 'mery_ad_batch')
 
+logger = Log::logger
+
+logger.info 'process started.'
+
+logger.debug 'EXEC_ENV: ' + ENV["MERYAD_EXEC_ENV"]
+logger.debug 'MERYAD_BATCH_PATH: ' + ENV["MERYAD_BATCH_PATH"]
+
 # ActiveRecord
 
 ActiveRecord::Base.configurations = YAML.load_file(File.join(ENV["MERYAD_BATCH_PATH"], 'config/database.yml'))
 ActiveRecord::Base.establish_connection(:"#{ENV["MERYAD_EXEC_ENV"]}_ad_master")
 ActiveRecord::Base.establish_connection(:"#{ENV["MERYAD_EXEC_ENV"]}_ad_slave")
 
-logger = Log::logger
-logger.info 'info level log..'
+logger.debug 'ActiveRecord configurations done.'
 
 SwitchPoint.configure do |config|
   config.define_switch_point :ad,
@@ -122,6 +128,7 @@ end
 
 class LogLineProcessor
   def process(buf)
+    logger = Log::logger
     sym = self.symbol
 
     # 開始時刻を記録
@@ -134,7 +141,7 @@ class LogLineProcessor
     else
       last_record = RecordLog.where(symbol: sym).order_by(:recorded_at.desc).first.recorded_at
     end
-#    p last_record
+    logger.info 'calc_report records from: ' + last_record.to_s
 
     campaign_by_id = {}
 
@@ -148,7 +155,7 @@ class LogLineProcessor
     cnt = 0
     crit.lt(:time => sup).each { |r|
       # ここでデータ作る
-#      printf("[%d]: %p\n", cnt, r)
+      logger.debug sprintf("[%d]: %p", cnt, r)
 
       ca = nil
       if campaign_by_id.key?(r.CampaignID) then
@@ -160,7 +167,7 @@ class LogLineProcessor
         campaign_by_id[r.CampaignID] = ca
       end
       next if ca.nil?
-#      printf("campaign_id: %d => adv_id: %d\n", ca.id, ca.advertiser_id)
+#      logger.debug sprintf("campaign_id: %d => adv_id: %d", ca.id, ca.advertiser_id)
       cnt = cnt + 1
       counter_args = {
         :date => r.time,
@@ -217,6 +224,8 @@ class CountBuffer
   end
 
   def accumulate(sym, args)
+    logger = Log::logger
+    logger.debug sprintf('# accumulate(%s): %p', sym, args)
     date = args[:date].to_date
     @counter[date] ||= {}
     @counter[date][args[:advertiser_id]] ||= {}
@@ -262,7 +271,9 @@ end
 # Main processes
 
 count_buffer = CountBuffer.new
+logger.info 'process deliver logs...'
 DeliverLogLineProcessor.new.process(count_buffer)
+logger.info 'process click logs...'
 ClickLogLineProcessor.new.process(count_buffer)
 
 count_buffer.each do |c|
@@ -297,4 +308,8 @@ count_buffer.each do |c|
       spend: spend,
     )
   end
+
+  logger.info sprintf('insert record to reports: c=%p, spend=%d', c, spend)
 end
+
+logger.info 'process is completed.'
