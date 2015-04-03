@@ -16,9 +16,9 @@ end
 class Log
   @@logger = nil
   def self.logger
-    if @@logger.nil? then
+    if @@logger.nil?
       @@logger = Logger.new(File.join(ENV["MERYAD_BATCH_PATH"], 'log/calc_report.log'))
-      if ( ENV["MERYAD_EXEC_ENV"] == "production" ) then
+      if ( ENV["MERYAD_EXEC_ENV"] == "production" )
         @@logger.level = Logger::INFO
       end
       @@logger.progname = 'calc_report.rb'
@@ -29,7 +29,7 @@ end
 
 # Environments
 
-if ( ENV["MERYAD_EXEC_ENV"] == "production" ) then
+if ( ENV["MERYAD_EXEC_ENV"] == "production" )
   is_production = true
 else
   ENV["MERYAD_EXEC_ENV"] = "development"
@@ -69,7 +69,7 @@ end
 # Mongoid
 
 mongoid_yml = File.join(ENV["MERYAD_BATCH_PATH"], 'config/mongoid.yml')
-if is_production then
+if is_production
   Mongoid.load!(mongoid_yml, :production)
 else
   Mongoid.load!(mongoid_yml, :development)
@@ -81,7 +81,8 @@ class DeliverLogLine
     field :UserAgent, :type => String
     field :RemoteAddr, :type => String
     field :SessionID, :type => String
-#    field :Timestamp, :type => DateTime
+    field :LoggedAt, :type => DateTime
+    field :DeliveredAt, :type => DateTime
     field :MediaURL, :type => String
     field :ImpressionID, :type => String
     field :AdType, :type => String
@@ -101,7 +102,8 @@ class ClickLogLine
     field :UserAgent, :type => String
     field :RemoteAddr, :type => String
     field :SessionID, :type => String
-#    field :Timestamp, :type => DateTime
+    field :LoggedAt, :type => DateTime
+    field :DeliveredAt, :type => DateTime
     field :MediaURL, :type => String
     field :ImpressionID, :type => String
     field :AdType, :type => String
@@ -120,6 +122,7 @@ class RecordLog
     field :started_at, :type => DateTime
     field :written_data, :type => Hash
     field :symbol, :type => String
+    field :record_sup, :type => DateTime
     field :recorded_at, :type => DateTime
 #    store_in collection: "record_log"
 end
@@ -135,22 +138,29 @@ class LogLineProcessor
     start_at = DateTime.now
 
     # 最後に記録された時刻を取得
-    if ENV["MERYAD_LAST_RECORDED_AT"] then
+    if ENV["MERYAD_LAST_RECORD_SUP"]
 #      last_record = Time.parse('2015-03-12T00:00:00')
-      last_record = Time.parse(ENV["MERYAD_LAST_RECORDED_AT"])
+      last_record_sup = Time.parse(ENV["MERYAD_LAST_RECORD_SUP"])
     else
-      last_record = RecordLog.where(symbol: sym).order_by(:recorded_at.desc).first.recorded_at
+      last_record_sup = RecordLog.where(symbol: sym).order_by(:record_sup.desc).first.recorded_at || 0
     end
-    logger.info 'calc_report records from: ' + last_record.to_s
+    logger.info 'calc_report records from: ' + last_record_sup.to_s
 
     campaign_by_id = {}
 
-    # 現在の秒.00より小さいレコードに限定
-    crit = self.criteria(last_record)
+    crit = self.criteria(last_record_sup)
 
+    # 現在の秒.00より小さいレコードに限定（カブりを防ぐため）
     last_one = crit.last
     return buf if last_one.nil?
     sup = Time.at(last_one.time.to_i) # :00
+    logger.debug sprintf("sup: %p", sup)
+
+    # supがlast_record_sup + 1secより前なら置き換え
+    # （いつまでも計上されないこと防止＋二重起動無し＆1秒以上の間隔開けて起動されること前提）
+    if sup.to_time.to_i < last_record_sup.to_time.to_i + 1
+      sup = Time.at(last_record_sup.to_time.to_i + 1)
+    end
 
     cnt = 0
     crit.lt(:time => sup).each { |r|
@@ -158,7 +168,7 @@ class LogLineProcessor
       logger.debug sprintf("[%d]: %p", cnt, r)
 
       ca = nil
-      if campaign_by_id.key?(r.CampaignID) then
+      if campaign_by_id.key?(r.CampaignID)
         ca = campaign_by_id[r.CampaignID]
       else
         Campaign.with_readonly do
@@ -177,10 +187,10 @@ class LogLineProcessor
         :unit_id => r.UnitID
       }
 
-      if /BannerAd/ =~ r.AdType then
+      if /BannerAd/ =~ r.AdType
         counter_args[:ad_id] = r.AdData["ID"]
         counter_args[:creative_id] = r.AdData["CreativeID"]
-      elsif /ThirdAd/ =~ r.AdType then
+      elsif /ThirdAd/ =~ r.AdType
         counter_args[:ad_id] = r.AdData["ID"]
         counter_args[:creative_id] = r.AdData["CreativeID"]
       end
@@ -192,6 +202,7 @@ class LogLineProcessor
       started_at: start_at,
       written_data: {:count => 100},
       symbol: sym,
+      record_sup: sup,
       recorded_at: DateTime.now
     )
     return buf
@@ -203,8 +214,8 @@ class DeliverLogLineProcessor < LogLineProcessor
     return "deliver"
   end
 
-  def criteria(last_time)
-    return DeliverLogLine.gte(:time => last_time).order_by(:time.asc)
+  def criteria(start_time)
+    return DeliverLogLine.gte(:time => start_time).order_by(:time.asc)
   end
 end
 
@@ -213,8 +224,8 @@ class ClickLogLineProcessor < LogLineProcessor
     return "click"
   end
 
-  def criteria(last_time)
-    return ClickLogLine.gte(:time => last_time).order_by(:time.asc)
+  def criteria(start_time)
+    return ClickLogLine.gte(:time => start_time).order_by(:time.asc)
   end
 end
 
