@@ -4,3 +4,5 @@ gem 'activerecord'
 gem 'mysql2'
 
 gem "mongoid", "~> 4.0.0"
+
+gem 'switch_point'

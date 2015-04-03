@@ -2,12 +2,77 @@ require 'mongoid'
 require 'time'
 require 'active_record'
 require 'mysql2'
+require 'yaml'
+require 'switch_point'
+require 'logger'
 
-Mongoid.load!('config/mongoid.yml', :development)
+# Type
 
 module BidChargeType
   CPC = 1
   CPM = 2
+end
+
+class Log
+  @@logger = nil
+  def self.logger
+    if @@logger.nil?
+      @@logger = Logger.new(File.join(ENV["MERYAD_BATCH_PATH"], 'log/calc_report.log'))
+      if ( ENV["MERYAD_EXEC_ENV"] == "production" )
+        @@logger.level = Logger::INFO
+      end
+      @@logger.progname = 'calc_report.rb'
+    end
+    return @@logger
+  end
+end
+
+# Environments
+
+if ( ENV["MERYAD_EXEC_ENV"] == "production" )
+  is_production = true
+else
+  ENV["MERYAD_EXEC_ENV"] = "development"
+end
+
+ENV["MERYAD_BATCH_PATH"] ||= File.join(ENV["HOME"], 'mery_ad_batch')
+
+logger = Log::logger
+
+logger.info 'process started.'
+
+logger.debug 'EXEC_ENV: ' + ENV["MERYAD_EXEC_ENV"]
+logger.debug 'MERYAD_BATCH_PATH: ' + ENV["MERYAD_BATCH_PATH"]
+
+# ActiveRecord
+
+ActiveRecord::Base.configurations = YAML.load_file(File.join(ENV["MERYAD_BATCH_PATH"], 'config/database.yml'))
+ActiveRecord::Base.establish_connection(:"#{ENV["MERYAD_EXEC_ENV"]}_ad_master")
+ActiveRecord::Base.establish_connection(:"#{ENV["MERYAD_EXEC_ENV"]}_ad_slave")
+
+logger.debug 'ActiveRecord configurations done.'
+
+SwitchPoint.configure do |config|
+  config.define_switch_point :ad,
+    readonly: :"#{ENV["MERYAD_EXEC_ENV"]}_ad_master",
+    writable: :"#{ENV["MERYAD_EXEC_ENV"]}_ad_slave"
+end
+
+class Campaign < ActiveRecord::Base
+  use_switch_point :ad
+end
+
+class Report < ActiveRecord::Base
+  use_switch_point :ad
+end
+
+# Mongoid
+
+mongoid_yml = File.join(ENV["MERYAD_BATCH_PATH"], 'config/mongoid.yml')
+if is_production
+  Mongoid.load!(mongoid_yml, :production)
+else
+  Mongoid.load!(mongoid_yml, :development)
 end
 
 class DeliverLogLine
@@ -16,7 +81,8 @@ class DeliverLogLine
     field :UserAgent, :type => String
     field :RemoteAddr, :type => String
     field :SessionID, :type => String
-#    field :Timestamp, :type => DateTime
+    field :LoggedAt, :type => DateTime
+    field :DeliveredAt, :type => DateTime
     field :MediaURL, :type => String
     field :ImpressionID, :type => String
     field :AdType, :type => String
@@ -36,7 +102,8 @@ class ClickLogLine
     field :UserAgent, :type => String
     field :RemoteAddr, :type => String
     field :SessionID, :type => String
-#    field :Timestamp, :type => DateTime
+    field :LoggedAt, :type => DateTime
+    field :DeliveredAt, :type => DateTime
     field :MediaURL, :type => String
     field :ImpressionID, :type => String
     field :AdType, :type => String
@@ -50,35 +117,68 @@ class ClickLogLine
     store_in collection: "click_logs"
 end
 
+class RecordLog
+    include Mongoid::Document
+    field :started_at, :type => DateTime
+    field :written_data, :type => Hash
+    field :symbol, :type => String
+    field :record_sup, :type => DateTime
+    field :recorded_at, :type => DateTime
+#    store_in collection: "record_log"
+end
+
+# Other classes
+
 class LogLineProcessor
   def process(buf)
+    logger = Log::logger
     sym = self.symbol
 
     # 開始時刻を記録
     start_at = DateTime.now
 
     # 最後に記録された時刻を取得
-#    last_record = RecordLog.where(symbol: sym).order_by(:recorded_at.desc).first.recorded_at
-    last_record = Time.parse('2015-03-12T00:00:00')
+    if ENV["MERYAD_LAST_RECORD_SUP"]
+#      last_record = Time.parse('2015-03-12T00:00:00')
+      last_record_sup = Time.parse(ENV["MERYAD_LAST_RECORD_SUP"])
+    else
+      last_record_sup = RecordLog.where(symbol: sym).order_by(:record_sup.desc).first.recorded_at || 0
+    end
+    logger.info 'calc_report records from: ' + last_record_sup.to_s
 
     campaign_by_id = {}
 
+    crit = self.criteria(last_record_sup)
+
+    # 現在の秒.00より小さいレコードに限定（カブりを防ぐため）
+    last_one = crit.last
+    return buf if last_one.nil?
+    sup = Time.at(last_one.time.to_i) # :00
+    logger.debug sprintf("sup: %p", sup)
+
+    # supがlast_record_sup + 1secより前なら置き換え
+    # （いつまでも計上されないこと防止＋二重起動無し＆1秒以上の間隔開けて起動されること前提）
+    if sup.to_time.to_i < last_record_sup.to_time.to_i + 1
+      sup = Time.at(last_record_sup.to_time.to_i + 1)
+    end
+
     cnt = 0
-    self.criteria(last_record).each { |r|
+    crit.lt(:time => sup).each { |r|
       # ここでデータ作る
-      printf("[%d]: %p\n", cnt, r)
-    
-      if campaign_by_id.key?(r.CampaignID) then
+      logger.debug sprintf("[%d]: %p", cnt, r)
+
+      ca = nil
+      if campaign_by_id.key?(r.CampaignID)
         ca = campaign_by_id[r.CampaignID]
-    #    p '# cache hit'
       else
-        ca = Campaign.find_by_id(r.CampaignID)
+        Campaign.with_readonly do
+          ca = Campaign.find_by_id(r.CampaignID)
+        end
         campaign_by_id[r.CampaignID] = ca
       end
       next if ca.nil?
-      printf("campaign_id: %d => adv_id: %d\n", ca.id, ca.advertiser_id)
+#      logger.debug sprintf("campaign_id: %d => adv_id: %d", ca.id, ca.advertiser_id)
       cnt = cnt + 1
-    
       counter_args = {
         :date => r.time,
         :advertiser_id => ca.advertiser_id,
@@ -86,15 +186,15 @@ class LogLineProcessor
         :publisher_id => r.PublisherID,
         :unit_id => r.UnitID
       }
-    
-      if /BannerAd/ =~ r.AdType then
+
+      if /BannerAd/ =~ r.AdType
         counter_args[:ad_id] = r.AdData["ID"]
         counter_args[:creative_id] = r.AdData["CreativeID"]
-      elsif /ThirdAd/ =~ r.AdType then
+      elsif /ThirdAd/ =~ r.AdType
         counter_args[:ad_id] = r.AdData["ID"]
         counter_args[:creative_id] = r.AdData["CreativeID"]
       end
-    
+
       buf.accumulate(sym, counter_args)
     }
 
@@ -102,6 +202,7 @@ class LogLineProcessor
       started_at: start_at,
       written_data: {:count => 100},
       symbol: sym,
+      record_sup: sup,
       recorded_at: DateTime.now
     )
     return buf
@@ -113,42 +214,19 @@ class DeliverLogLineProcessor < LogLineProcessor
     return "deliver"
   end
 
-  def criteria(last_time)
-    return DeliverLogLine.gte(:time => last_time).order_by(:time.asc)
+  def criteria(start_time)
+    return DeliverLogLine.gte(:time => start_time).order_by(:time.asc)
   end
 end
 
-class DeliverLogLineProcessor < LogLineProcessor
+class ClickLogLineProcessor < LogLineProcessor
   def symbol
     return "click"
   end
 
-  def criteria(last_time)
-    return ClickLogLine.gte(:time => last_time).order_by(:time.asc)
+  def criteria(start_time)
+    return ClickLogLine.gte(:time => start_time).order_by(:time.asc)
   end
-end
-
-class RecordLog
-    include Mongoid::Document
-    field :started_at, :type => DateTime
-    field :written_data, :type => Hash
-    field :symbol, :type => String
-    field :recorded_at, :type => DateTime
-#    store_in collection: "record_log"
-end
-
-ActiveRecord::Base.establish_connection(
-  :adapter => 'mysql2',
-  :host => 'localhost',
-  :username => 'adpf_user',
-  :password => 'sd98udha73a2vm',
-  :database => 'mery_adpf',
-)
-
-class Campaign < ActiveRecord::Base
-end
-
-class Report < ActiveRecord::Base
 end
 
 class CountBuffer
@@ -157,7 +235,8 @@ class CountBuffer
   end
 
   def accumulate(sym, args)
-    p sym
+    logger = Log::logger
+    logger.debug sprintf('# accumulate(%s): %p', sym, args)
     date = args[:date].to_date
     @counter[date] ||= {}
     @counter[date][args[:advertiser_id]] ||= {}
@@ -200,15 +279,22 @@ class CountBuffer
   end
 end
 
+# Main processes
+
 count_buffer = CountBuffer.new
+logger.info 'process deliver logs...'
 DeliverLogLineProcessor.new.process(count_buffer)
+logger.info 'process click logs...'
 ClickLogLineProcessor.new.process(count_buffer)
 
 count_buffer.each do |c|
-  # spendを計算する
+  # calc spend
   spend = 0
-  ca = Campaign.find_by_id(c[:campaign_id])
-  next if ca.nil? 
+  ca = nil
+  Campaign.with_readonly do
+    ca = Campaign.find_by_id(c[:campaign_id])
+  end
+  next if ca.nil?
 
   case ca.bid_charge_type
   when BidChargeType::CPC
@@ -218,17 +304,23 @@ count_buffer.each do |c|
   else
   end
 
-  # ここでMySQLに加算
-  Report.create!(
-    date: c[:date],
-    advertier_id: c[:advertiser_id],
-    campaign_id: c[:campaign_id],
-    creative_id: c[:creative_id],
-    ad_id: c[:ad_id],
-    publisher_id: c[:publisher_id],
-    unit_id: c[:unit_id],
-    impression_count: c[:impression_count],
-    click_count: c[:click_count],
-    spend: spend,
-  )
+  # insert as mysql records
+  Report.with_writable do
+    Report.create!(
+      date: c[:date],
+      advertiser_id: c[:advertiser_id],
+      campaign_id: c[:campaign_id],
+      creative_id: c[:creative_id],
+      ad_id: c[:ad_id],
+      publisher_id: c[:publisher_id],
+      unit_id: c[:unit_id],
+      impression_count: c[:impression_count],
+      click_count: c[:click_count],
+      spend: spend,
+    )
+  end
+
+  logger.info sprintf('insert record to reports: c=%p, spend=%d', c, spend)
 end
+
+logger.info 'process is completed.'
