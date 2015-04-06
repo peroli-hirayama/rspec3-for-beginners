@@ -143,7 +143,7 @@ class LogLineProcessor
       last_record_sup = Time.parse(ENV["MERYAD_LAST_RECORD_SUP"])
     else
       last_record = RecordLog.where(symbol: sym).order_by(:record_sup.desc).first
-      last_record_sup = last_record.nil? ? Time.at(0) : last_record.recorded_at
+      last_record_sup = last_record.nil? ? Time.at(0) : last_record.record_sup
     end
     logger.info 'calc_report records from: ' + last_record_sup.to_s
 
@@ -199,13 +199,12 @@ class LogLineProcessor
       buf.accumulate(sym, counter_args)
     }
 
-    RecordLog.create!(
+    buf.record_log(sym,
       started_at: start_at,
-      written_data: {:count => 100},
-      symbol: sym,
       record_sup: sup,
       recorded_at: DateTime.now
     )
+
     return buf
   end
 end
@@ -233,6 +232,7 @@ end
 class CountBuffer
   def initialize
     @counter = {}
+    @logs = {}
   end
 
   def accumulate(sym, args)
@@ -278,6 +278,12 @@ class CountBuffer
       end
     end
   end
+
+  def record_log(sym, args)
+    @logs[sym] = args
+  end
+
+  attr_reader :logs
 end
 
 # Main processes
@@ -323,5 +329,14 @@ count_buffer.each do |c|
 
   logger.info sprintf('insert record to reports: c=%p, spend=%d', c, spend)
 end
+
+count_buffer.logs.each{ |sym, log|
+  RecordLog.create!(
+      started_at: log[:started_at],
+      symbol: sym,
+      record_sup: log[:record_sup],
+      recorded_at: log[:recorded_at]
+  )
+}
 
 logger.info 'process is completed.'
