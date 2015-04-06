@@ -122,6 +122,7 @@ class RecordLog
     field :started_at, :type => DateTime
     field :written_data, :type => Hash
     field :symbol, :type => String
+    field :record_from, :type => DateTime
     field :record_sup, :type => DateTime
     field :recorded_at, :type => DateTime
 #    store_in collection: "record_log"
@@ -201,6 +202,7 @@ class LogLineProcessor
 
     buf.record_log(sym,
       started_at: start_at,
+      record_from: last_record_sup,
       record_sup: sup,
       recorded_at: DateTime.now
     )
@@ -266,7 +268,7 @@ class CountBuffer
                     :ad_id => ad_id,
                     :publisher_id => pub_id,
                     :unit_id => unit_id,
-                    :impression_count => unit_v["deliver"],
+                    :impression_count => unit_v["deliver"] || 0,
                     :click_count => unit_v["click"] || 0,
                   }
                   yield counts
@@ -334,6 +336,7 @@ count_buffer.logs.each{ |sym, log|
   RecordLog.create!(
       started_at: log[:started_at],
       symbol: sym,
+      record_from: log[:record_from],
       record_sup: log[:record_sup],
       recorded_at: log[:recorded_at]
   )
