@@ -54,8 +54,8 @@ logger.debug 'ActiveRecord configurations done.'
 
 SwitchPoint.configure do |config|
   config.define_switch_point :ad,
-    readonly: :"#{ENV["MERYAD_EXEC_ENV"]}_ad_master",
-    writable: :"#{ENV["MERYAD_EXEC_ENV"]}_ad_slave"
+    readonly: :"#{ENV["MERYAD_EXEC_ENV"]}_ad_slave",
+    writable: :"#{ENV["MERYAD_EXEC_ENV"]}_ad_master"
 end
 
 class Campaign < ActiveRecord::Base
@@ -142,7 +142,8 @@ class LogLineProcessor
 #      last_record = Time.parse('2015-03-12T00:00:00')
       last_record_sup = Time.parse(ENV["MERYAD_LAST_RECORD_SUP"])
     else
-      last_record_sup = RecordLog.where(symbol: sym).order_by(:record_sup.desc).first.recorded_at || 0
+      last_record = RecordLog.where(symbol: sym).order_by(:record_sup.desc).first
+      last_record_sup = last_record.nil? ? Time.at(0) : last_record.recorded_at
     end
     logger.info 'calc_report records from: ' + last_record_sup.to_s
 
