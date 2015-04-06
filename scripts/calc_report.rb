@@ -93,7 +93,7 @@ class DeliverLogLine
     field :NativePublisherCreativeID, :type => Integer
     field :AdData, :type => Hash # 複雑化するならクラス化する
     field :time, :type => DateTime
-    store_in collection: "deliver_logs"
+    store_in collection: "deliver"
 end
 
 class ClickLogLine
@@ -114,7 +114,7 @@ class ClickLogLine
     field :NativePublisherCreativeID, :type => Integer
     field :AdData, :type => Hash # 複雑化するならクラス化する
     field :time, :type => DateTime
-    store_in collection: "click_logs"
+    store_in collection: "click"
 end
 
 class RecordLog

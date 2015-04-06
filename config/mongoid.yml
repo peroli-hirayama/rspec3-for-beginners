@@ -8,6 +8,6 @@ development:
 production:
     sessions:
         default:
-            database: fluentd
+            database: adpf
             hosts:
                 - localhost:27017
