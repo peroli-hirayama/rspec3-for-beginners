@@ -1,0 +1,8 @@
+/.bundle/
+/Gemfile.lock
+/vendor/
+
+# Ignore vim .swp file
+*.swp
+*.swo
+*.log
