@@ -1,0 +1,6 @@
+#!/usr/bin/env ruby
+
+require "commands/calc_report"
+require 'commands/calc_report/command'
+
+Commands::CalcReport::Command.run(ARGV)
