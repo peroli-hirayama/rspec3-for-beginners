@@ -6,10 +6,7 @@ shared_examples 'MessageFilter with argument "foo"' do
 end
 
 describe MessageFilter, 'with argument "foo"' do
-  before do
-    @filter = MessageFilter.new('foo')
-  end
-  subject { @filter }
+  subject { MessageFilter.new('foo') }
   it_behaves_like 'MessageFilter with argument "foo"'
 end
 
