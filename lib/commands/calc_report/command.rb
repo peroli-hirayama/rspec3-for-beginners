@@ -67,14 +67,16 @@ module Commands
           logger.info sprintf('insert record to reports: counter=%p, spend=%d', counter, spend)
         end
 
-        count_buffer.logs.each do |sym, log|
-          Models::Mongoid::RecordLog.create!(
-              started_at:  log[:started_at],
-              symbol:      sym,
-              record_from: log[:record_from],
-              record_sup:  log[:record_sup],
-              recorded_at: log[:recorded_at]
-          )
+        %w(:deliver :click).each do |sym|
+          count_buffer.each_record(:deliver) do |log|
+            Models::Mongoid::RecordLog.create!(
+                started_at:  log[:started_at],
+                symbol:      sym,
+                record_from: log[:record_from],
+                record_sup:  log[:record_sup],
+                recorded_at: log[:recorded_at]
+            )
+          end
         end
 
         logger.info 'process is completed.'

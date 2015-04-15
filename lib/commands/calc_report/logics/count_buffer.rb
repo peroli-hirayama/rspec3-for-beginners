@@ -54,12 +54,15 @@ module Commands
             end
           end
         end
-      
+
         def record_log(sym, args)
           @logs[sym] = args
         end
-      
-        attr_reader :logs
+
+        def each_record(sym)
+          yield @logs[sym]
+        end
+
       end
     end
   end
